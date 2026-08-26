@@ -1,5 +1,6 @@
 use crate::app::{App, Focus, Mode};
 use crate::html::{RichSpan, TextMark, html_to_rich};
+use crate::script::{self, contains_sinhala, ellipsize_shaped, render_shaped};
 use crate::timefmt::{relative, wire_clock};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
@@ -9,8 +10,6 @@ use ratatui::widgets::{
     Block, Clear, List, ListItem, Padding, Paragraph, Scrollbar, ScrollbarOrientation,
     ScrollbarState, Wrap,
 };
-use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
 
 /// One Dark: slate background, cyan accent, no purple.
 struct Theme {
@@ -179,7 +178,7 @@ fn draw_feeds(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     let content = accent_pane(frame, area, focused, theme.blue, theme);
 
     let mut items = Vec::with_capacity(app.feeds.len() + 1);
-    items.push(feed_item(
+    items.push(feed_row(
         "All",
         app.total_unread(),
         None,
@@ -188,7 +187,7 @@ fn draw_feeds(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
         theme,
     ));
     for (i, feed) in app.feeds.iter().enumerate() {
-        items.push(feed_item(
+        items.push(feed_row(
             &feed.title,
             feed.unread,
             feed.error.as_deref(),
@@ -198,105 +197,109 @@ fn draw_feeds(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
         ));
     }
 
-    let list = List::new(items)
-        .block(pane_block("feeds", focused, theme.blue, theme))
-        .highlight_style(
-            Style::new()
-                .bg(theme.select)
-                .fg(theme.fg)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("▸ ");
-    frame.render_stateful_widget(list, content, &mut app.feed_state);
+    let block = pane_block("feeds", focused, theme.blue, theme);
+    let inner = block.inner(content);
+    frame.render_widget(block, content);
+    let selected = app.feed_state.selected().unwrap_or(0);
+    let offset = visible_offset(items.len(), selected, inner.height as usize);
+    for (row, item) in items.iter().skip(offset).take(inner.height as usize).enumerate() {
+        let y = inner.y + row as u16;
+        let area = Rect::new(inner.x, y, inner.width, 1);
+        let is_sel = offset + row == selected;
+        let bg = if is_sel {
+            theme.select
+        } else {
+            item.row_bg
+        };
+        frame.buffer_mut().set_style(area, Style::new().bg(bg));
+        let prefix = if is_sel { "▸ " } else { "  " };
+        let prefix_w: u16 = 4;
+        render_shaped(
+            frame.buffer_mut(),
+            Rect::new(area.x, y, 2, 1),
+            prefix,
+            Style::new().fg(if is_sel { theme.fg } else { theme.dim }).bg(bg),
+        );
+        render_shaped(
+            frame.buffer_mut(),
+            Rect::new(area.x + 2, y, 2, 1),
+            item.mark,
+            Style::new().fg(item.mark_color).bg(bg).bold(),
+        );
+        let title_w = area.width.saturating_sub(prefix_w + 4); // count column
+        render_shaped(
+            frame.buffer_mut(),
+            Rect::new(area.x + prefix_w, y, title_w, 1),
+            &ellipsize_shaped(&item.title, title_w as usize),
+            Style::new().fg(theme.fg).bg(bg),
+        );
+        render_shaped(
+            frame.buffer_mut(),
+            Rect::new(area.right().saturating_sub(4), y, 4, 1),
+            &item.count,
+            Style::new().fg(item.mark_color).bg(bg).bold(),
+        );
+    }
 }
 
-fn feed_item(
+struct RowData {
+    title: String,
+    mark: &'static str,
+    mark_color: Color,
+    count: String,
+    row_bg: Color,
+}
+
+fn feed_row(
     title: &str,
     unread: i64,
     error: Option<&str>,
     accent: Color,
     row: usize,
     theme: &Theme,
-) -> ListItem<'static> {
+) -> RowData {
     let row_bg = if row % 2 == 1 {
         theme.panel_alt
     } else {
         theme.panel
     };
-    let mark = if error.is_some() {
-        Span::styled(" ● ", Style::new().fg(theme.red).bold())
+    let (mark, mark_color) = if error.is_some() {
+        ("● ", theme.red)
     } else if unread > 0 {
-        Span::styled(" ● ", Style::new().fg(accent).bold())
+        ("● ", accent)
     } else {
-        Span::styled(" ○ ", Style::new().fg(theme.dim))
+        ("○ ", theme.dim)
     };
     let count = if unread > 0 {
-        Span::styled(format!("{unread:>3}"), Style::new().fg(accent).bold())
+        format!("{unread:>3}")
     } else {
-        Span::styled("  ·", Style::new().fg(theme.dim))
+        "  ·".into()
     };
-    ListItem::new(Line::from(vec![
+    RowData {
+        title: title.to_string(),
         mark,
-        Span::styled(ellipsize(title, 16), Style::new().fg(theme.fg)),
-        Span::raw(" "),
+        mark_color,
         count,
-    ]))
-    .style(Style::new().bg(row_bg))
+        row_bg,
+    }
+}
+
+fn visible_offset(len: usize, selected: usize, height: usize) -> usize {
+    if height == 0 || len == 0 {
+        return 0;
+    }
+    let selected = selected.min(len.saturating_sub(1));
+    if selected < height {
+        0
+    } else {
+        selected + 1 - height
+    }
 }
 
 fn draw_stories(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     let focused = app.focus == Focus::Articles && app.mode == Mode::Normal;
     let content = accent_pane(frame, area, focused, theme.cyan, theme);
     let now = chrono::Utc::now().timestamp();
-    let inner_width = content.width.saturating_sub(6) as usize;
-    let title_width = inner_width.saturating_sub(14).max(8);
-
-    let items: Vec<ListItem> = if app.articles.is_empty() {
-        vec![
-            ListItem::new(Line::from(Span::styled(
-                "  no stories — press r to refresh",
-                Style::new().fg(theme.cyan).italic(),
-            )))
-            .style(Style::new().bg(theme.panel)),
-        ]
-    } else {
-        app.articles
-            .iter()
-            .enumerate()
-            .map(|(i, article)| {
-                let accent = theme.feed_swatch(&article.feed_title);
-                let row_bg = if i % 2 == 1 {
-                    theme.panel_alt
-                } else {
-                    theme.panel
-                };
-                let bullet = if article.is_read {
-                    Span::styled(" ○ ", Style::new().fg(theme.dim))
-                } else {
-                    Span::styled(" ● ", Style::new().fg(theme.cyan).bold())
-                };
-                let title_style = if article.is_read {
-                    Style::new().fg(theme.dim)
-                } else {
-                    Style::new().fg(theme.fg).bold()
-                };
-                let when = article
-                    .published
-                    .map(|ts| relative(ts, now))
-                    .unwrap_or_else(|| "—".into());
-                ListItem::new(Line::from(vec![
-                    bullet,
-                    Span::styled(ellipsize(&article.title, title_width), title_style),
-                    Span::styled(format!(" {when:>4} "), Style::new().fg(theme.cyan)),
-                    Span::styled(
-                        feed_tag(&article.feed_title),
-                        Style::new().fg(accent).bold(),
-                    ),
-                ]))
-                .style(Style::new().bg(row_bg))
-            })
-            .collect()
-    };
 
     let mut label = String::from("stories");
     if app.unread_only {
@@ -307,16 +310,79 @@ fn draw_stories(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
         label.push_str(q);
     }
 
-    let list = List::new(items)
-        .block(pane_block(&label, focused, theme.cyan, theme))
-        .highlight_style(
-            Style::new()
-                .bg(theme.select)
-                .fg(theme.fg)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("");
-    frame.render_stateful_widget(list, content, &mut app.article_state);
+    let block = pane_block(&label, focused, theme.cyan, theme);
+    let inner = block.inner(content);
+    frame.render_widget(block, content);
+
+    if app.articles.is_empty() {
+        render_shaped(
+            frame.buffer_mut(),
+            inner,
+            "no stories — press r to refresh",
+            Style::new().fg(theme.cyan),
+        );
+        return;
+    }
+
+    let selected = app.article_state.selected().unwrap_or(0);
+    let offset = visible_offset(app.articles.len(), selected, inner.height as usize);
+    let suffix_w = 10u16;
+    let title_w = inner.width.saturating_sub(4 + suffix_w);
+
+    for (row, article) in app
+        .articles
+        .iter()
+        .skip(offset)
+        .take(inner.height as usize)
+        .enumerate()
+    {
+        let y = inner.y + row as u16;
+        let is_sel = offset + row == selected;
+        let bg = if is_sel {
+            theme.select
+        } else if (offset + row) % 2 == 1 {
+            theme.panel_alt
+        } else {
+            theme.panel
+        };
+        let row_area = Rect::new(inner.x, y, inner.width, 1);
+        frame.buffer_mut().set_style(row_area, Style::new().bg(bg));
+        let accent = theme.feed_swatch(&article.feed_title);
+        let mark = if article.is_read { "○ " } else { "● " };
+        let mark_color = if article.is_read {
+            theme.dim
+        } else {
+            theme.cyan
+        };
+        let title_style = if article.is_read {
+            Style::new().fg(theme.dim).bg(bg)
+        } else {
+            Style::new().fg(theme.fg).bg(bg).bold()
+        };
+        let when = article
+            .published
+            .map(|ts| relative(ts, now))
+            .unwrap_or_else(|| "—".into());
+        render_shaped(
+            frame.buffer_mut(),
+            Rect::new(inner.x, y, 2, 1),
+            mark,
+            Style::new().fg(mark_color).bg(bg).bold(),
+        );
+        render_shaped(
+            frame.buffer_mut(),
+            Rect::new(inner.x + 2, y, title_w, 1),
+            &ellipsize_shaped(&article.title, title_w as usize),
+            title_style,
+        );
+        let suffix = format!("{when:>4} {}", feed_tag(&article.feed_title));
+        render_shaped(
+            frame.buffer_mut(),
+            Rect::new(inner.right().saturating_sub(suffix_w), y, suffix_w, 1),
+            &suffix,
+            Style::new().fg(accent).bg(bg),
+        );
+    }
 }
 
 fn draw_reader(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
@@ -369,23 +435,33 @@ fn draw_reader(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     ])
     .areas(padded);
 
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(
-                article.feed_title.to_uppercase(),
-                Style::new().fg(accent).bold(),
-            ),
-            Span::styled("  ·  ", Style::new().fg(theme.dim)),
-            Span::styled(when, Style::new().fg(theme.dim)),
-        ])),
-        kicker_area,
-    );
+    if contains_sinhala(&article.feed_title) {
+        let kicker = format!("{}  ·  {}", article.feed_title, when);
+        render_shaped(
+            frame.buffer_mut(),
+            kicker_area,
+            &kicker,
+            Style::new().fg(accent).bold(),
+        );
+    } else {
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(
+                    article.feed_title.to_uppercase(),
+                    Style::new().fg(accent).bold(),
+                ),
+                Span::styled("  ·  ", Style::new().fg(theme.dim)),
+                Span::styled(when, Style::new().fg(theme.dim)),
+            ])),
+            kicker_area,
+        );
+    }
 
-    frame.render_widget(
-        Paragraph::new(article.title.clone())
-            .style(Style::new().fg(theme.fg).bold())
-            .wrap(Wrap { trim: true }),
+    render_shaped(
+        frame.buffer_mut(),
         title_area,
+        &article.title,
+        Style::new().fg(theme.fg).bold(),
     );
 
     let mut byline = vec![
@@ -403,7 +479,7 @@ fn draw_reader(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     if let Some(url) = article.url.as_deref() {
         byline.push(Span::styled("   ", Style::new()));
         byline.push(Span::styled(
-            ellipsize(url, padded.width.saturating_sub(36) as usize),
+            ellipsize_shaped(url, padded.width.saturating_sub(36) as usize),
             Style::new().fg(theme.dim),
         ));
     }
@@ -438,18 +514,34 @@ fn draw_reader(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     }
 
     let wrap_width = body_area.width.max(24) as usize;
-    let rich = html_to_rich(article.body_html(), wrap_width);
-    let lines: Vec<Line> = rich.iter().map(|spans| rich_line(spans, theme)).collect();
-    let line_count = lines.len() as u16;
+    let (body_text, line_count) = shaped_body(article.body_html(), wrap_width);
     let max_scroll = line_count.saturating_sub(body_area.height);
     app.clamp_reader_scroll(max_scroll);
 
-    frame.render_widget(
-        Paragraph::new(lines)
-            .style(Style::new().fg(theme.body))
-            .scroll((app.reader_scroll, 0)),
-        body_area,
-    );
+    if contains_sinhala(&body_text) {
+        let start = app.reader_scroll as usize;
+        let visible: String = script::wrap_shaped(&body_text, wrap_width)
+            .into_iter()
+            .skip(start)
+            .take(body_area.height as usize)
+            .collect::<Vec<_>>()
+            .join("\n");
+        render_shaped(
+            frame.buffer_mut(),
+            body_area,
+            &visible,
+            Style::new().fg(theme.body),
+        );
+    } else {
+        let rich = html_to_rich(article.body_html(), wrap_width);
+        let lines: Vec<Line> = rich.iter().map(|spans| rich_line(spans, theme)).collect();
+        frame.render_widget(
+            Paragraph::new(lines)
+                .style(Style::new().fg(theme.body))
+                .scroll((app.reader_scroll, 0)),
+            body_area,
+        );
+    }
 
     if line_count > body_area.height {
         let mut state =
@@ -466,9 +558,31 @@ fn draw_reader(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
 
 fn title_height(title: &str, width: u16) -> u16 {
     let width = width.max(1) as usize;
-    let chars = UnicodeWidthStr::width(title).max(1);
-    let lines = chars.div_ceil(width) as u16;
+    let cols = script::display_width(title).max(1) as usize;
+    let lines = cols.div_ceil(width) as u16;
     lines.clamp(2, 4)
+}
+
+fn shaped_body(html: &str, width: usize) -> (String, u16) {
+    let rich = html_to_rich(html, 10_000);
+    let mut body = String::new();
+    for line in &rich {
+        if line.iter().all(|span| span.text.trim().is_empty()) {
+            if !body.ends_with('\n') {
+                body.push('\n');
+            }
+            body.push('\n');
+            continue;
+        }
+        if !body.is_empty() && !body.ends_with('\n') {
+            body.push('\n');
+        }
+        for span in line {
+            body.push_str(&span.text);
+        }
+    }
+    let line_count = script::wrap_shaped(&body, width).len() as u16;
+    (body, line_count)
 }
 
 fn rich_line(spans: &[RichSpan], theme: &Theme) -> Line<'static> {
@@ -778,28 +892,6 @@ fn centered(area: Rect, width: u16, height: u16) -> Rect {
     )
 }
 
-fn ellipsize(s: &str, max_cols: usize) -> String {
-    if max_cols == 0 {
-        return String::new();
-    }
-    if UnicodeWidthStr::width(s) <= max_cols {
-        return s.to_string();
-    }
-    let mut out = String::new();
-    let mut used = 0;
-    let limit = max_cols.saturating_sub(1);
-    for grapheme in s.graphemes(true) {
-        let w = UnicodeWidthStr::width(grapheme).max(1);
-        if used + w > limit {
-            break;
-        }
-        out.push_str(grapheme);
-        used += w;
-    }
-    out.push('…');
-    out
-}
-
 fn feed_tag(name: &str) -> String {
     let initials: String = name
         .split_whitespace()
@@ -814,22 +906,23 @@ fn feed_tag(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ellipsize, feed_tag};
+    use super::feed_tag;
+    use crate::script::ellipsize_shaped;
 
     #[test]
     fn ellipsize_short_is_unchanged() {
-        assert_eq!(ellipsize("hello", 10), "hello");
+        assert_eq!(ellipsize_shaped("hello", 10), "hello");
     }
 
     #[test]
     fn ellipsize_long_adds_ellipsis() {
-        assert_eq!(ellipsize("hello world", 8), "hello w…");
+        assert_eq!(ellipsize_shaped("hello world", 8), "hello w…");
     }
 
     #[test]
     fn ellipsize_keeps_sinhala_clusters() {
         let title = "ශ්‍රී ලංකාවේ පුවත්";
-        let cut = ellipsize(title, 8);
+        let cut = ellipsize_shaped(title, 8);
         assert!(cut.ends_with('…'), "{cut}");
         assert!(
             !cut.trim_end_matches('…').ends_with('\u{0DCA}'),

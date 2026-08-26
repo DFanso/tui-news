@@ -97,6 +97,16 @@ The story pane uses the full width. HTML in the feed is rendered as terminal tex
 
 Some feeds (Hacker News, Lobsters) only send a **headline and link**. That is a publisher choice. Press `o` to open those in a browser. Feeds that include `<description>` or `<content:encoded>` show the body in the pane.
 
+### Sinhala and other Indic text
+
+The reader keeps Sinhala conjuncts (virama + ZWJ + consonant) in one terminal cell so Windows Terminal can shape them. Reinstall from git after this change:
+
+```bash
+cargo install --git https://github.com/DFanso/tui-news --force
+```
+
+If letters still look like boxes, the **font** has no Sinhala glyphs. In Windows Terminal: *Settings → Defaults → Appearance → Font face*, add a fallback such as **Iskoola Pota** or **Noto Sans Sinhala** (Cascadia Mono does not cover Sinhala).
+
 ## Theme
 
 One Dark: slate background, cyan accent, blue feeds, orange tags, green when caught up, yellow while fetching, red on errors.
