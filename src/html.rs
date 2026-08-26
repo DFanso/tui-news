@@ -1,4 +1,6 @@
 use html2text::render::{RichAnnotation, TaggedLine};
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextMark {
@@ -78,9 +80,25 @@ fn wrap_plain(text: &str, width: usize) -> Vec<Vec<RichSpan>> {
     let mut lines = Vec::new();
     let mut current = String::new();
     for word in text.split_whitespace() {
+        let word_w = UnicodeWidthStr::width(word);
+        if word_w > width {
+            if !current.is_empty() {
+                lines.push(vec![RichSpan {
+                    text: std::mem::take(&mut current),
+                    marks: Vec::new(),
+                }]);
+            }
+            lines.extend(wrap_graphemes(word, width));
+            continue;
+        }
+        let next_width = if current.is_empty() {
+            word_w
+        } else {
+            UnicodeWidthStr::width(current.as_str()) + 1 + word_w
+        };
         if current.is_empty() {
             current = word.to_string();
-        } else if current.len() + 1 + word.len() <= width {
+        } else if next_width <= width {
             current.push(' ');
             current.push_str(word);
         } else {
@@ -90,6 +108,31 @@ fn wrap_plain(text: &str, width: usize) -> Vec<Vec<RichSpan>> {
             }]);
             current = word.to_string();
         }
+    }
+    if !current.is_empty() {
+        lines.push(vec![RichSpan {
+            text: current,
+            marks: Vec::new(),
+        }]);
+    }
+    lines
+}
+
+fn wrap_graphemes(text: &str, width: usize) -> Vec<Vec<RichSpan>> {
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    let mut used = 0;
+    for grapheme in text.graphemes(true) {
+        let w = UnicodeWidthStr::width(grapheme).max(1);
+        if used + w > width && !current.is_empty() {
+            lines.push(vec![RichSpan {
+                text: std::mem::take(&mut current),
+                marks: Vec::new(),
+            }]);
+            used = 0;
+        }
+        current.push_str(grapheme);
+        used += w;
     }
     if !current.is_empty() {
         lines.push(vec![RichSpan {
@@ -126,7 +169,7 @@ fn decode_basic(s: &str) -> String {
 /// Visible character count after tags are stripped. Used to pick the
 /// longest RSS field (content vs description vs media).
 pub fn visible_len(html: &str) -> usize {
-    strip_tags(html).chars().count()
+    UnicodeWidthStr::width(strip_tags(html).as_str())
 }
 
 pub fn looks_empty(html: &str) -> bool {

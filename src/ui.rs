@@ -9,6 +9,8 @@ use ratatui::widgets::{
     Block, Clear, List, ListItem, Padding, Paragraph, Scrollbar, ScrollbarOrientation,
     ScrollbarState, Wrap,
 };
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 /// One Dark: slate background, cyan accent, no purple.
 struct Theme {
@@ -464,7 +466,7 @@ fn draw_reader(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
 
 fn title_height(title: &str, width: u16) -> u16 {
     let width = width.max(1) as usize;
-    let chars = title.chars().count().max(1);
+    let chars = UnicodeWidthStr::width(title).max(1);
     let lines = chars.div_ceil(width) as u16;
     lines.clamp(2, 4)
 }
@@ -776,16 +778,24 @@ fn centered(area: Rect, width: u16, height: u16) -> Rect {
     )
 }
 
-fn ellipsize(s: &str, max_chars: usize) -> String {
-    if max_chars == 0 {
+fn ellipsize(s: &str, max_cols: usize) -> String {
+    if max_cols == 0 {
         return String::new();
     }
-    let count = s.chars().count();
-    if count <= max_chars {
+    if UnicodeWidthStr::width(s) <= max_cols {
         return s.to_string();
     }
-    let take = max_chars.saturating_sub(1);
-    let mut out: String = s.chars().take(take).collect();
+    let mut out = String::new();
+    let mut used = 0;
+    let limit = max_cols.saturating_sub(1);
+    for grapheme in s.graphemes(true) {
+        let w = UnicodeWidthStr::width(grapheme).max(1);
+        if used + w > limit {
+            break;
+        }
+        out.push_str(grapheme);
+        used += w;
+    }
     out.push('…');
     out
 }
@@ -814,6 +824,17 @@ mod tests {
     #[test]
     fn ellipsize_long_adds_ellipsis() {
         assert_eq!(ellipsize("hello world", 8), "hello w…");
+    }
+
+    #[test]
+    fn ellipsize_keeps_sinhala_clusters() {
+        let title = "ශ්‍රී ලංකාවේ පුවත්";
+        let cut = ellipsize(title, 8);
+        assert!(cut.ends_with('…'), "{cut}");
+        assert!(
+            !cut.trim_end_matches('…').ends_with('\u{0DCA}'),
+            "dangling virama: {cut}"
+        );
     }
 
     #[test]
