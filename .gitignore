@@ -1,0 +1,7 @@
+/target
+**/*.rs.bk
+.idea/
+.vscode/
+*.db
+*.db-wal
+*.db-shm
