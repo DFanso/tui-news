@@ -1,6 +1,6 @@
 use crate::db::Store;
 use crate::fetch::{self, FetchedFeed};
-use crate::model::{Article, Feed};
+use crate::model::{Article, CatalogFeed, Feed, catalog_suggestions, looks_like_feed_url};
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::widgets::ListState;
@@ -38,6 +38,7 @@ pub struct App {
     pub articles: Vec<Article>,
     pub feed_state: ListState,
     pub article_state: ListState,
+    pub catalog_state: ListState,
     pub focus: Focus,
     pub mode: Mode,
     pub input: String,
@@ -64,6 +65,7 @@ impl App {
             articles: Vec::new(),
             feed_state: ListState::default().with_selected(Some(0)),
             article_state: ListState::default(),
+            catalog_state: ListState::default().with_selected(Some(0)),
             focus: Focus::Feeds,
             mode: Mode::Normal,
             input: String::new(),
@@ -116,7 +118,7 @@ impl App {
         !self.in_flight.is_empty()
     }
 
-    fn reload(&mut self) -> Result<()> {
+    pub fn reload(&mut self) -> Result<()> {
         let prev_article = self.selected_article().map(|a| a.id);
         let prev_feed_idx = self.feed_state.selected();
         self.feeds = self.store.list_feeds()?;
@@ -178,10 +180,7 @@ impl App {
             KeyCode::PageUp => self.scroll_reader(-8),
             KeyCode::Char('r') => self.refresh_selected(),
             KeyCode::Char('R') => self.refresh_all(),
-            KeyCode::Char('a') => {
-                self.input.clear();
-                self.mode = Mode::AddFeed;
-            }
+            KeyCode::Char('a') => self.open_add_feed(),
             KeyCode::Char('d') => {
                 if self.selected_feed().is_some() {
                     self.mode = Mode::ConfirmDelete;
@@ -216,30 +215,88 @@ impl App {
         Ok(false)
     }
 
+    fn open_add_feed(&mut self) {
+        self.input.clear();
+        self.catalog_state.select(Some(0));
+        self.mode = Mode::AddFeed;
+    }
+
+    pub fn catalog_matches(&self) -> Vec<&'static CatalogFeed> {
+        let subscribed: Vec<&str> = self.feeds.iter().map(|f| f.url.as_str()).collect();
+        catalog_suggestions(&self.input, &subscribed)
+    }
+
     fn handle_add_feed(&mut self, key: KeyEvent) -> Result<bool> {
         match key.code {
             KeyCode::Esc => {
                 self.mode = Mode::Normal;
                 self.input.clear();
             }
+            KeyCode::Up => self.move_catalog(-1),
+            KeyCode::Down => self.move_catalog(1),
+            KeyCode::Tab => {
+                if let Some(feed) = self.selected_catalog() {
+                    self.input = feed.url.to_string();
+                    self.catalog_state.select(Some(0));
+                }
+            }
             KeyCode::Enter => {
-                let raw = self.input.clone();
-                self.mode = Mode::Normal;
-                self.input.clear();
-                self.add_feed(&raw)?;
+                self.submit_add_feed()?;
             }
             KeyCode::Backspace => {
                 self.input.pop();
+                self.catalog_state.select(Some(0));
             }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.input.clear();
+                self.catalog_state.select(Some(0));
             }
             KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.input.push(c);
+                self.catalog_state.select(Some(0));
             }
             _ => {}
         }
         Ok(false)
+    }
+
+    fn move_catalog(&mut self, delta: i32) {
+        let len = self.catalog_matches().len();
+        if len == 0 {
+            self.catalog_state.select(None);
+            return;
+        }
+        let cur = self.catalog_state.selected().unwrap_or(0);
+        self.catalog_state.select(Some(wrap_index(cur, len, delta)));
+    }
+
+    fn selected_catalog(&self) -> Option<&'static CatalogFeed> {
+        let matches = self.catalog_matches();
+        self.catalog_state
+            .selected()
+            .and_then(|i| matches.get(i).copied())
+    }
+
+    fn submit_add_feed(&mut self) -> Result<()> {
+        if looks_like_feed_url(&self.input) {
+            let raw = self.input.clone();
+            self.mode = Mode::Normal;
+            self.input.clear();
+            return self.add_feed_named(&raw, None);
+        }
+        if let Some(feed) = self.selected_catalog() {
+            self.mode = Mode::Normal;
+            self.input.clear();
+            return self.add_feed_named(feed.url, Some(feed.name));
+        }
+        if !self.input.trim().is_empty() {
+            let raw = self.input.clone();
+            self.mode = Mode::Normal;
+            self.input.clear();
+            return self.add_feed_named(&raw, None);
+        }
+        self.set_status("pick a popular feed or paste an RSS URL", true);
+        Ok(())
     }
 
     fn handle_search(&mut self, key: KeyEvent) -> Result<bool> {
@@ -400,7 +457,7 @@ impl App {
         });
     }
 
-    fn add_feed(&mut self, raw: &str) -> Result<()> {
+    fn add_feed_named(&mut self, raw: &str, title: Option<&str>) -> Result<()> {
         let url = match fetch::normalize_url(raw) {
             Ok(url) => url,
             Err(e) => {
@@ -412,8 +469,9 @@ impl App {
             self.set_status(&format!("already subscribed: {}", existing.title), true);
             return Ok(());
         }
-        let feed = self.store.add_feed(&url, &url)?;
-        self.set_status("fetching new feed…", false);
+        let title = title.unwrap_or(url.as_str());
+        let feed = self.store.add_feed(&url, title)?;
+        self.set_status(&format!("added {title} — fetching…"), false);
         self.reload()?;
         if let Some(idx) = self.feeds.iter().position(|f| f.id == feed.id) {
             self.feed_state.select(Some(idx + 1));

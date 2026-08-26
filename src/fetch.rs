@@ -99,12 +99,33 @@ fn entry_to_article(entry: Entry) -> Option<NewArticle> {
     let published = entry.published.or(entry.updated).map(|dt| dt.timestamp());
     let summary = entry
         .summary
-        .map(|t| t.content)
+        .as_ref()
+        .map(|t| t.content.clone())
         .filter(|s| !s.trim().is_empty());
-    let content = entry
+    let encoded = entry
         .content
-        .and_then(|c| c.body)
+        .as_ref()
+        .and_then(|c| c.body.clone())
         .filter(|s| !s.trim().is_empty());
+    let media = entry.media.iter().find_map(|object| {
+        object
+            .description
+            .as_ref()
+            .map(|t| t.content.clone())
+            .filter(|s| !s.trim().is_empty())
+    });
+    let content = match (encoded, media) {
+        (Some(a), Some(b)) => Some(
+            if crate::html::visible_len(&a) >= crate::html::visible_len(&b) {
+                a
+            } else {
+                b
+            },
+        ),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        _ => None,
+    };
     Some(NewArticle {
         guid,
         title,
@@ -168,7 +189,34 @@ mod tests {
             Some("https://example.com/hello")
         );
         assert!(fetched.articles[0].published.is_some());
+        assert_eq!(
+            fetched.articles[0].summary.as_deref(),
+            Some("<p>First <em>story</em>.</p>")
+        );
         assert_eq!(fetched.articles[1].title, "(untitled)");
+    }
+
+    #[test]
+    fn prefers_content_encoded_over_short_description() {
+        let xml = r#"<?xml version="1.0"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>Blog</title>
+    <item>
+      <title>Full post</title>
+      <link>https://example.com/post</link>
+      <description>Short blurb.</description>
+      <content:encoded><![CDATA[<p>This is the full HTML body of the post with enough text.</p>]]></content:encoded>
+    </item>
+  </channel>
+</rss>"#;
+        let fetched = from_parsed(
+            parser::parse(xml.as_bytes()).unwrap(),
+            "https://example.com/rss",
+        );
+        let article = &fetched.articles[0];
+        assert!(article.content.as_ref().unwrap().contains("full HTML body"));
+        assert_eq!(article.summary.as_deref(), Some("Short blurb."));
     }
 
     #[test]

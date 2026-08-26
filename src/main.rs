@@ -1,12 +1,7 @@
-mod app;
-mod db;
-mod fetch;
-mod html;
-mod model;
-mod timefmt;
-mod ui;
-
 use anyhow::Result;
+use tui_news::app;
+use tui_news::db;
+use tui_news::ui;
 use clap::Parser;
 use crossterm::event::{Event, EventStream};
 use futures::StreamExt;

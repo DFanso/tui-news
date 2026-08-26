@@ -2,36 +2,48 @@
 
 A keyboard-first RSS/Atom news reader for the terminal.
 
-Three panes — feeds, stories, reader — with vim keys, unread tracking, and a local SQLite store. First launch seeds a few public feeds so there is something to read immediately.
+Three panes — feeds, stories, reader — with vim keys, unread tracking, and a local SQLite store. First launch seeds public feeds so there is something to read immediately.
 
-```
- TUI-NEWS   WED 26 AUG 2026  14:32   12 UNREAD
-┌ FEEDS ─────────────┐┌ STORIES ─────────────────────────────────────┐
-│▸ All            12 ││ ● Senate vote delayed                   14m  │
-│  ● Hacker News   5 ││ ○ Rust 1.95 released                     2h  │
-│    BBC World     7 ││ ● New foundry in Arizona                 3h  │
-└────────────────────┘└──────────────────────────────────────────────┘
-┌ STORY ─────────────────────────────────────────────────────────────┐
-│ Senate vote delayed                                                │
-│ BBC World  ·  14m  ·  unread                                       │
-│                                                                    │
-│ Wrapped article text…                                              │
-└────────────────────────────────────────────────────────────────────┘
- j/k move  tab pane  r refresh  o open  space read  / find  q quit
-```
+[![CI](https://github.com/DFanso/tui-news/actions/workflows/ci.yml/badge.svg)](https://github.com/DFanso/tui-news/actions/workflows/ci.yml)
+[![Release](https://github.com/DFanso/tui-news/actions/workflows/release.yml/badge.svg)](https://github.com/DFanso/tui-news/releases)
+
+![Main view](docs/screenshots/main.png)
 
 ## Install
 
-Needs a Rust toolchain (1.85+) and a C compiler for bundled SQLite.
+### Prebuilt binaries
+
+Download the latest build from [Releases](https://github.com/DFanso/tui-news/releases):
+
+| Platform | Asset |
+| --- | --- |
+| Windows x64 | `tui-news-windows-x86_64.exe` |
+| Linux x64 | `tui-news-linux-x86_64` |
+| macOS Apple Silicon | `tui-news-macos-aarch64` |
+| macOS Intel | `tui-news-macos-x86_64` |
+
+On Unix:
+
+```bash
+chmod +x tui-news-linux-x86_64
+./tui-news-linux-x86_64
+```
+
+On Windows, run `tui-news-windows-x86_64.exe`.
+
+### From source
+
+Needs Rust 1.85+ and a C compiler (bundled SQLite).
 
 ```bash
 cargo install --git https://github.com/DFanso/tui-news
 ```
 
-Or from a local clone:
+Or from a clone:
 
 ```bash
 cargo install --path .
+cargo run --release
 ```
 
 ## Usage
@@ -51,7 +63,17 @@ Data lives in the platform user-data directory:
 | macOS | `~/Library/Application Support/tui-news/tui-news.db` |
 | Linux | `~/.local/share/tui-news/tui-news.db` |
 
+## Add feeds
+
+Press `a` to subscribe. Type to search a built-in catalog (NPR, Guardian, Ars Technica, NASA, …) or paste any RSS/Atom/JSON Feed URL.
+
+![Add a feed](docs/screenshots/add-feed.png)
+
+`↑`/`↓` then `enter` adds the highlighted catalog feed. A pasted URL is added as-is. Already-subscribed feeds are hidden.
+
 ## Keys
+
+![Key reference](docs/screenshots/help.png)
 
 | Key | Action |
 | --- | --- |
@@ -61,7 +83,7 @@ Data lives in the platform user-data directory:
 | `space` / `m` | Toggle read |
 | `n` / `p` | Next / previous unread |
 | `r` / `R` | Refresh selected feed / all feeds |
-| `a` | Add a feed URL |
+| `a` | Add a feed (catalog or URL) |
 | `d` | Delete the selected feed |
 | `/` | Search titles |
 | `u` | Unread-only filter |
@@ -69,11 +91,26 @@ Data lives in the platform user-data directory:
 | `?` | Key reference |
 | `q` | Quit |
 
-RSS, Atom, and JSON Feed are all accepted. HTML bodies are converted to wrapped terminal text.
+## Reading
+
+The story pane uses the full width. HTML in the feed is rendered as terminal text: **bold**, *italic*, [links](), and `code`.
+
+Some feeds (Hacker News, Lobsters) only send a **headline and link**. That is a publisher choice. Press `o` to open those in a browser. Feeds that include `<description>` or `<content:encoded>` show the body in the pane.
+
+## Theme
+
+One Dark: slate background, cyan accent, blue feeds, orange tags, green when caught up, yellow while fetching, red on errors.
 
 ## Development
 
 ```bash
 cargo test
 cargo run
+cargo run --example screenshots   # rewrite docs/screenshots/*.png
 ```
+
+Release builds are produced on version tags (`v0.1.0`, …) by [`.github/workflows/release.yml`](.github/workflows/release.yml).
+
+## License
+
+MIT
