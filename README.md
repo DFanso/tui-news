@@ -125,7 +125,7 @@ cargo run
 cargo run --example screenshots   # rewrite docs/screenshots/*.png
 ```
 
-Release builds are produced on version tags (`v0.1.0`, …) by [`.github/workflows/release.yml`](.github/workflows/release.yml).
+Release builds are produced on version tags (`v0.2.0`, …) by [`.github/workflows/release.yml`](.github/workflows/release.yml). A manual **Run workflow** also publishes if you pass a tag.
 
 ## License
 
