@@ -2,7 +2,7 @@
 
 A keyboard-first RSS/Atom news reader for the terminal.
 
-Three panes — feeds, stories, reader — with vim keys, unread tracking, and a local SQLite store. First launch seeds public feeds so there is something to read immediately.
+Three panes - feeds, stories, reader — with vim keys, unread tracking, and a local SQLite store. First launch seeds public feeds so there is something to read immediately.
 
 [![CI](https://github.com/DFanso/tui-news/actions/workflows/ci.yml/badge.svg)](https://github.com/DFanso/tui-news/actions/workflows/ci.yml)
 [![Release](https://github.com/DFanso/tui-news/actions/workflows/release.yml/badge.svg)](https://github.com/DFanso/tui-news/releases)
