@@ -71,6 +71,12 @@ Press `a` to subscribe. Type to search a built-in catalog (NPR, Guardian, Ars Te
 
 `↑`/`↓` then `enter` adds the highlighted catalog feed. A pasted URL is added as-is. Already-subscribed feeds are hidden.
 
+## Remove feeds
+
+Press `d` (or `Delete`) to unsubscribe. Pick a feed, press `enter`, then `y` to confirm. Stories from that feed are deleted from the local database.
+
+![Remove a feed](docs/screenshots/remove-feed.png)
+
 ## Keys
 
 ![Key reference](docs/screenshots/help.png)
@@ -84,7 +90,7 @@ Press `a` to subscribe. Type to search a built-in catalog (NPR, Guardian, Ars Te
 | `n` / `p` | Next / previous unread |
 | `r` / `R` | Refresh selected feed / all feeds |
 | `a` | Add a feed (catalog or URL) |
-| `d` | Delete the selected feed |
+| `d` / `Delete` | Remove a feed (pick, then confirm with `y`) |
 | `/` | Search titles |
 | `u` | Unread-only filter |
 | `A` | Mark visible stories read |

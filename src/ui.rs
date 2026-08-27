@@ -94,15 +94,16 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     match app.mode {
         Mode::Help => draw_help(frame, &theme),
         Mode::AddFeed => draw_add_feed(frame, app, &theme),
+        Mode::RemoveFeed => draw_remove_feed(frame, app, &theme),
         Mode::Search => {}
         Mode::ConfirmDelete => {
             let name = app
-                .selected_feed()
+                .selected_remove_feed()
                 .map(|f| f.title.as_str())
                 .unwrap_or("this feed");
             draw_prompt(
                 frame,
-                "delete feed",
+                "remove feed",
                 &format!("Remove {name} and its stories? [y/n]"),
                 "",
                 theme.red,
@@ -692,6 +693,69 @@ fn draw_add_feed(frame: &mut Frame, app: &mut App, theme: &Theme) {
     frame.render_stateful_widget(list, list_area, &mut app.catalog_state);
 }
 
+fn draw_remove_feed(frame: &mut Frame, app: &mut App, theme: &Theme) {
+    let area = centered(frame.area(), 74, 16);
+    frame.render_widget(Clear, area);
+    let block = Block::bordered()
+        .title(Span::styled(
+            " remove feed ",
+            Style::new().fg(theme.red).bold(),
+        ))
+        .border_style(Style::new().fg(theme.red))
+        .style(Style::new().bg(theme.panel).fg(theme.fg))
+        .padding(Padding::horizontal(1));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let [hint_area, list_area] =
+        Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(inner);
+
+    frame.render_widget(
+        Paragraph::new("↑↓ pick a feed   enter confirm   esc cancel")
+            .style(Style::new().fg(theme.dim)),
+        hint_area,
+    );
+
+    let items: Vec<ListItem> = if app.feeds.is_empty() {
+        vec![ListItem::new(Line::from(Span::styled(
+            "no feeds subscribed",
+            Style::new().fg(theme.yellow).italic(),
+        )))]
+    } else {
+        app.feeds
+            .iter()
+            .map(|feed| {
+                let unread = if feed.unread > 0 {
+                    Span::styled(
+                        format!("  {} unread", feed.unread),
+                        Style::new().fg(theme.cyan),
+                    )
+                } else {
+                    Span::raw("")
+                };
+                ListItem::new(Line::from(vec![
+                    Span::styled(
+                        format!("{:<22}", ellipsize_shaped(&feed.title, 22)),
+                        Style::new().fg(theme.fg).bold(),
+                    ),
+                    unread,
+                    Span::styled(format!("  {}", feed.url), Style::new().fg(theme.dim)),
+                ]))
+            })
+            .collect()
+    };
+
+    let list = List::new(items)
+        .highlight_style(
+            Style::new()
+                .bg(theme.select)
+                .fg(theme.fg)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("▸ ");
+    frame.render_stateful_widget(list, list_area, &mut app.remove_state);
+}
+
 fn draw_footer(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     let content = if app.mode == Mode::Search {
         Line::from(vec![
@@ -709,6 +773,24 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
             hint("use url", theme),
             cmd("esc", theme),
             hint("cancel", theme),
+        ])
+    } else if app.mode == Mode::RemoveFeed {
+        Line::from(vec![
+            cmd("↑↓", theme),
+            hint("pick", theme),
+            cmd("enter", theme),
+            hint("remove", theme),
+            cmd("esc", theme),
+            hint("cancel", theme),
+        ])
+    } else if app.mode == Mode::ConfirmDelete {
+        Line::from(vec![
+            cmd("y", theme),
+            hint("remove", theme),
+            cmd("n", theme),
+            hint("back", theme),
+            cmd("esc", theme),
+            hint("back", theme),
         ])
     } else if !app.status.is_empty() {
         let status_style = if app.status_error {
@@ -739,6 +821,8 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
             hint("unread", theme),
             cmd("a", theme),
             hint("add", theme),
+            cmd("d", theme),
+            hint("remove", theme),
             cmd("/", theme),
             hint("find", theme),
             cmd("?", theme),
@@ -752,7 +836,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
 }
 
 fn draw_help(frame: &mut Frame, theme: &Theme) {
-    let area = centered(frame.area(), 66, 20);
+    let area = centered(frame.area(), 66, 22);
     frame.render_widget(Clear, area);
     let text = vec![
         Line::from(Span::styled(
@@ -799,8 +883,12 @@ fn draw_help(frame: &mut Frame, theme: &Theme) {
             Span::raw("refresh selected / all"),
         ]),
         Line::from(vec![
-            Span::styled("  a d         ", Style::new().fg(theme.green).bold()),
-            Span::raw("add a feed (popular list or URL) / delete feed"),
+            Span::styled("  a           ", Style::new().fg(theme.green).bold()),
+            Span::raw("add a feed (catalog or URL)"),
+        ]),
+        Line::from(vec![
+            Span::styled("  d Del       ", Style::new().fg(theme.green).bold()),
+            Span::raw("remove a feed and its stories"),
         ]),
         Line::from(vec![
             Span::styled("  q           ", Style::new().fg(theme.green).bold()),

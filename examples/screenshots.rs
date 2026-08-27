@@ -44,6 +44,11 @@ fn main() -> Result<()> {
     app.catalog_state.select(Some(0));
     capture(&mut app, out.join("add-feed.png"))?;
 
+    app.mode = Mode::RemoveFeed;
+    app.input.clear();
+    app.remove_state.select(Some(0));
+    capture(&mut app, out.join("remove-feed.png"))?;
+
     app.mode = Mode::Help;
     app.input.clear();
     capture(&mut app, out.join("help.png"))?;

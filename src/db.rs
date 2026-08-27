@@ -164,6 +164,15 @@ impl Store {
         Ok(())
     }
 
+    pub fn feed_exists(&self, id: i64) -> Result<bool> {
+        let n: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM feeds WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )?;
+        Ok(n > 0)
+    }
+
     /// Insert or update articles. Returns how many rows were newly inserted.
     pub fn upsert_articles(&self, feed_id: i64, articles: &[NewArticle]) -> Result<u64> {
         if articles.is_empty() {
@@ -373,6 +382,7 @@ mod tests {
         store.delete_feed(feed.id).unwrap();
         assert!(store.list_feeds().unwrap().is_empty());
         assert!(store.list_articles(None, None, false).unwrap().is_empty());
+        assert!(!store.feed_exists(feed.id).unwrap());
     }
 
     #[test]

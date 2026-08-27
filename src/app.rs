@@ -19,6 +19,7 @@ pub enum Focus {
 pub enum Mode {
     Normal,
     AddFeed,
+    RemoveFeed,
     Search,
     ConfirmDelete,
     Help,
@@ -39,6 +40,7 @@ pub struct App {
     pub feed_state: ListState,
     pub article_state: ListState,
     pub catalog_state: ListState,
+    pub remove_state: ListState,
     pub focus: Focus,
     pub mode: Mode,
     pub input: String,
@@ -66,6 +68,7 @@ impl App {
             feed_state: ListState::default().with_selected(Some(0)),
             article_state: ListState::default(),
             catalog_state: ListState::default().with_selected(Some(0)),
+            remove_state: ListState::default().with_selected(Some(0)),
             focus: Focus::Feeds,
             mode: Mode::Normal,
             input: String::new(),
@@ -161,6 +164,7 @@ impl App {
                 return Ok(false);
             }
             Mode::AddFeed => return self.handle_add_feed(key),
+            Mode::RemoveFeed => return self.handle_remove_feed(key),
             Mode::Search => return self.handle_search(key),
             Mode::ConfirmDelete => return self.handle_confirm_delete(key),
             Mode::Normal => {}
@@ -181,13 +185,7 @@ impl App {
             KeyCode::Char('r') => self.refresh_selected(),
             KeyCode::Char('R') => self.refresh_all(),
             KeyCode::Char('a') => self.open_add_feed(),
-            KeyCode::Char('d') => {
-                if self.selected_feed().is_some() {
-                    self.mode = Mode::ConfirmDelete;
-                } else {
-                    self.set_status("select a feed to delete", true);
-                }
-            }
+            KeyCode::Char('d') | KeyCode::Char('D') | KeyCode::Delete => self.open_remove_feed(),
             KeyCode::Char('o') | KeyCode::Enter => self.open_browser()?,
             KeyCode::Char(' ') | KeyCode::Char('m') => self.toggle_read()?,
             KeyCode::Char('A') => self.mark_view_read()?,
@@ -219,6 +217,25 @@ impl App {
         self.input.clear();
         self.catalog_state.select(Some(0));
         self.mode = Mode::AddFeed;
+    }
+
+    fn open_remove_feed(&mut self) {
+        if self.feeds.is_empty() {
+            self.set_status("no feeds to remove — press a to add one", true);
+            return;
+        }
+        let idx = match self.feed_state.selected().unwrap_or(0) {
+            0 => 0,
+            i => (i - 1).min(self.feeds.len() - 1),
+        };
+        self.remove_state.select(Some(idx));
+        self.mode = Mode::RemoveFeed;
+    }
+
+    pub fn selected_remove_feed(&self) -> Option<&Feed> {
+        self.remove_state
+            .selected()
+            .and_then(|i| self.feeds.get(i))
     }
 
     pub fn catalog_matches(&self) -> Vec<&'static CatalogFeed> {
@@ -336,23 +353,62 @@ impl App {
         self.reload_articles(None)
     }
 
-    fn handle_confirm_delete(&mut self, key: KeyEvent) -> Result<bool> {
+    fn handle_remove_feed(&mut self, key: KeyEvent) -> Result<bool> {
         match key.code {
-            KeyCode::Char('y') | KeyCode::Char('Y') => {
-                self.mode = Mode::Normal;
-                if let Some(feed) = self.selected_feed().cloned() {
-                    self.store.delete_feed(feed.id)?;
-                    self.set_status(&format!("removed {}", feed.title), false);
-                    self.feed_state.select(Some(0));
-                    self.reload()?;
-                }
-            }
-            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-                self.mode = Mode::Normal;
+            KeyCode::Esc => self.mode = Mode::Normal,
+            KeyCode::Up | KeyCode::Char('k') => self.move_remove(-1),
+            KeyCode::Down | KeyCode::Char('j') => self.move_remove(1),
+            KeyCode::Enter | KeyCode::Char('d') | KeyCode::Char('D') | KeyCode::Delete
+                if self.selected_remove_feed().is_some() =>
+            {
+                self.mode = Mode::ConfirmDelete;
             }
             _ => {}
         }
         Ok(false)
+    }
+
+    fn move_remove(&mut self, delta: i32) {
+        let len = self.feeds.len();
+        if len == 0 {
+            self.remove_state.select(None);
+            return;
+        }
+        let cur = self.remove_state.selected().unwrap_or(0);
+        self.remove_state.select(Some(wrap_index(cur, len, delta)));
+    }
+
+    fn handle_confirm_delete(&mut self, key: KeyEvent) -> Result<bool> {
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                if let Some(feed) = self.selected_remove_feed().cloned() {
+                    self.remove_feed(feed)?;
+                }
+                self.mode = Mode::Normal;
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                self.mode = Mode::RemoveFeed;
+            }
+            _ => {}
+        }
+        Ok(false)
+    }
+
+    fn remove_feed(&mut self, feed: Feed) -> Result<()> {
+        let keep_idx = self.remove_state.selected().unwrap_or(0);
+        self.store.delete_feed(feed.id)?;
+        self.in_flight.remove(&feed.id);
+        self.set_status(&format!("removed {}", feed.title), false);
+        self.reload()?;
+        if self.feeds.is_empty() {
+            self.feed_state.select(Some(0));
+            self.remove_state.select(None);
+        } else {
+            let next = keep_idx.min(self.feeds.len() - 1);
+            self.remove_state.select(Some(next));
+            self.feed_state.select(Some(next + 1));
+        }
+        Ok(())
     }
 
     fn cycle_focus(&mut self, forward: bool) {
@@ -554,10 +610,17 @@ impl App {
     }
 
     pub fn apply_fetch(&mut self, msg: FetchMsg) -> Result<()> {
+        let feed_id = match &msg {
+            FetchMsg::Ok { feed_id, .. } | FetchMsg::Err { feed_id, .. } => *feed_id,
+        };
+        self.in_flight.remove(&feed_id);
+        if !self.store.feed_exists(feed_id)? {
+            return Ok(());
+        }
+
         let now = chrono::Utc::now().timestamp();
         match msg {
-            FetchMsg::Ok { feed_id, fetched } => {
-                self.in_flight.remove(&feed_id);
+            FetchMsg::Ok { fetched, .. } => {
                 let new_count = self.store.upsert_articles(feed_id, &fetched.articles)?;
                 self.store.update_feed_ok(
                     feed_id,
@@ -567,8 +630,7 @@ impl App {
                 )?;
                 self.batch_new += new_count;
             }
-            FetchMsg::Err { feed_id, error } => {
-                self.in_flight.remove(&feed_id);
+            FetchMsg::Err { error, .. } => {
                 self.store.update_feed_error(feed_id, &error, now)?;
             }
         }
@@ -619,12 +681,83 @@ fn wrap_index(current: usize, len: usize, delta: i32) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::wrap_index;
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     #[test]
     fn wrap_moves_and_loops() {
         assert_eq!(wrap_index(0, 3, 1), 1);
         assert_eq!(wrap_index(2, 3, 1), 0);
         assert_eq!(wrap_index(0, 3, -1), 2);
+    }
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::new(code, KeyModifiers::NONE))
+            .unwrap();
+    }
+
+    fn test_app() -> (App, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let app = App::open(dir.path().join("t.db"), tx).unwrap();
+        (app, dir)
+    }
+
+    #[test]
+    fn d_opens_remove_feed_even_on_all() {
+        let (mut app, _dir) = test_app();
+        assert!(!app.feeds.is_empty());
+        app.feed_state.select(Some(0));
+        press(&mut app, KeyCode::Char('d'));
+        assert_eq!(app.mode, Mode::RemoveFeed);
+        assert_eq!(app.remove_state.selected(), Some(0));
+    }
+
+    #[test]
+    fn delete_key_opens_remove_feed() {
+        let (mut app, _dir) = test_app();
+        press(&mut app, KeyCode::Delete);
+        assert_eq!(app.mode, Mode::RemoveFeed);
+    }
+
+    #[test]
+    fn y_removes_the_picked_feed() {
+        let (mut app, _dir) = test_app();
+        let before = app.feeds.len();
+        let title = app.feeds[0].title.clone();
+        press(&mut app, KeyCode::Char('d'));
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.mode, Mode::ConfirmDelete);
+        press(&mut app, KeyCode::Char('y'));
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.feeds.len(), before - 1);
+        assert!(!app.feeds.iter().any(|f| f.title == title));
+    }
+
+    #[test]
+    fn n_cancels_back_to_picker() {
+        let (mut app, _dir) = test_app();
+        let before = app.feeds.len();
+        press(&mut app, KeyCode::Char('d'));
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('n'));
+        assert_eq!(app.mode, Mode::RemoveFeed);
+        assert_eq!(app.feeds.len(), before);
+    }
+
+    #[test]
+    fn apply_fetch_ignores_removed_feed() {
+        let (mut app, _dir) = test_app();
+        let feed = app.feeds[0].clone();
+        app.store.delete_feed(feed.id).unwrap();
+        app.apply_fetch(FetchMsg::Ok {
+            feed_id: feed.id,
+            fetched: crate::fetch::FetchedFeed {
+                title: "gone".into(),
+                site_url: None,
+                articles: vec![],
+            },
+        })
+        .unwrap();
     }
 }
